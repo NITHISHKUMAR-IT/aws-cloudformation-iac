@@ -32,17 +32,34 @@ Manual infrastructure creation is slow and difficult to reproduce. CloudFormatio
 - HTTP port 80 is the only public inbound rule.
 - IAM permissions use the managed `AmazonSSMManagedInstanceCore` policy.
 
-## Architecture
-
-```mermaid
 flowchart LR
-    User[User Browser] -->|HTTP 80| IGW[Internet Gateway]
-    IGW --> RT[Public Route Table]
-    RT --> Subnet[Public Subnet]
-    Subnet --> SG[Security Group]
-    SG --> EC2[Amazon EC2]
-    EC2 --> Nginx[Nginx Website]
-    SSM[AWS Systems Manager] -->|Secure administration| EC2
+    User[User Browser]
+    Admin[Administrator]
+    Internet[Internet]
+    SSM[AWS Systems Manager]
+
+    subgraph VPC[Custom VPC 10.20.0.0/16]
+        IGW[Internet Gateway]
+
+        subgraph PublicSubnet[Public Subnet 10.20.1.0/24]
+            RT[Public Route Table<br>0.0.0.0/0 → IGW]
+            SG[Security Group<br>HTTP 80 Allowed]
+            EC2[Amazon EC2<br>Amazon Linux 2023]
+            IAM[IAM Role + Instance Profile]
+            Nginx[Nginx Website]
+        end
+    end
+
+    User -->|HTTP 80| Internet
+    Internet --> IGW
+    IGW --> RT
+    RT --> EC2
+    SG --> EC2
+    IAM --> EC2
+    EC2 --> Nginx
+
+    Admin --> SSM
+    SSM -->|Secure Session via HTTPS| EC2
 ```
 
 ## Repository Structure
