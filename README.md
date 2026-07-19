@@ -32,34 +32,72 @@ Manual infrastructure creation is slow and difficult to reproduce. CloudFormatio
 - HTTP port 80 is the only public inbound rule.
 - IAM permissions use the managed `AmazonSSMManagedInstanceCore` policy.
 
+## Architecture
+
+```mermaid
 flowchart LR
-    User[User Browser]
-    Admin[Administrator]
-    Internet[Internet]
-    SSM[AWS Systems Manager]
+    User["User Browser"]
+    Admin["Administrator"]
+    Internet["Internet"]
+    SSM["AWS Systems Manager"]
 
-    subgraph VPC[Custom VPC 10.20.0.0/16]
-        IGW[Internet Gateway]
+    subgraph VPC["Custom VPC - 10.20.0.0/16"]
+        IGW["Internet Gateway"]
+        RT["Public Route Table<br/>0.0.0.0/0 → Internet Gateway"]
+        SG["Security Group<br/>Allow HTTP Port 80"]
 
-        subgraph PublicSubnet[Public Subnet 10.20.1.0/24]
-            RT[Public Route Table<br>0.0.0.0/0 → IGW]
-            SG[Security Group<br>HTTP 80 Allowed]
-            EC2[Amazon EC2<br>Amazon Linux 2023]
-            IAM[IAM Role + Instance Profile]
-            Nginx[Nginx Website]
+        subgraph PublicSubnet["Public Subnet - 10.20.1.0/24"]
+            EC2["Amazon EC2<br/>Amazon Linux 2023"]
+            Nginx["Nginx Website"]
         end
     end
 
-    User -->|HTTP 80| Internet
+    IAM["IAM Role + Instance Profile"]
+
+    User -->|"HTTP Port 80"| Internet
     Internet --> IGW
-    IGW --> RT
-    RT --> EC2
-    SG --> EC2
-    IAM --> EC2
+    IGW --> EC2
+
+    RT -.->|"Subnet route association"| EC2
+    SG -.->|"Attached security group"| EC2
+    IAM -.->|"Attached instance profile"| EC2
+
     EC2 --> Nginx
 
     Admin --> SSM
-    SSM -->|Secure Session via HTTPS| EC2
+    SSM -->|"Secure session over HTTPS"| EC2
+```
+
+### Request Flow
+
+```text
+User Browser
+    ↓ HTTP Port 80
+Internet
+    ↓
+Internet Gateway
+    ↓
+Public Route Table
+    ↓
+Public Subnet
+    ↓
+Security Group
+    ↓
+Amazon EC2
+    ↓
+Nginx Website
+```
+
+### Secure Administration Flow
+
+```text
+Administrator
+    ↓
+AWS Systems Manager Session Manager
+    ↓ HTTPS Port 443
+SSM Agent on EC2
+    ↓
+IAM Role Authorization
 ```
 
 ## Repository Structure
