@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Production-inspired CloudFormation stack for a public Nginx web server.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: nithish-cloudformation-web
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9-]{2,30}$'
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small]
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  ProjectVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: { Fn::Sub: '${ProjectName}-${Environment}-vpc' }
+        - Key: Project
+          Value: { Ref: ProjectName }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: { Fn::Sub: '${ProjectName}-${Environment}-igw' }
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: { Ref: InternetGateway }
+      VpcId: { Ref: ProjectVPC }
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: { Ref: ProjectVPC }
+      CidrBlock: 10.20.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ''
+      Tags:
+        - Key: Name
+          Value: { Fn::Sub: '${ProjectName}-${Environment}-public-subnet' }
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: { Ref: ProjectVPC }
+      Tags:
+        - Key: Name
+          Value: { Fn::Sub: '${ProjectName}-${Environment}-public-rt' }
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: { Ref: PublicRouteTable }
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: { Ref: InternetGateway }
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: { Ref: PublicRouteTable }
+      SubnetId: { Ref: PublicSubnet }
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow public HTTP traffic to the Nginx web server.
+      VpcId: { Ref: ProjectVPC }
+      SecurityGroupIngress:
+        - Description: Allow HTTP from the internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Allow all outbound traffic
+          IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: { Fn::Sub: '${ProjectName}-${Environment}-web-sg' }
+
+  EC2SSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: { Fn::Sub: '${ProjectName}-${Environment}-ec2-ssm-role' }
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ec2.amazonaws.com]
+            Action: [sts:AssumeRole]
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Project
+          Value: { Ref: ProjectName }
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: { Fn::Sub: '${ProjectName}-${Environment}-instance-profile' }
+      Roles: [{ Ref: EC2SSMRole }]
+
+  WebServer:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultPublicRoute
+    Properties:
+      ImageId: { Ref: LatestAmiId }
+      InstanceType: { Ref: InstanceType }
+      SubnetId: { Ref: PublicSubnet }
+      SecurityGroupIds: [{ Ref: WebSecurityGroup }]
+      IamInstanceProfile: { Ref: EC2InstanceProfile }
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: 8
+            VolumeType: gp3
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euxo pipefail
+            dnf update -y
+            dnf install -y nginx
+            cat > /usr/share/nginx/html/index.html <<'EOF'
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>CloudFormation Deployment</title>
+              <style>
+                *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;font-family:Inter,Arial,sans-serif;color:#f7f9fc;background:radial-gradient(circle at top,rgba(255,153,0,.18),transparent 35%),linear-gradient(150deg,#07111f,#0b1b30 60%,#08101c)}main{width:min(820px,100%);padding:48px;border:1px solid rgba(255,255,255,.14);border-radius:28px;background:rgba(15,30,49,.88);box-shadow:0 30px 90px rgba(0,0,0,.45)}.eyebrow{color:#ff9900;font-weight:800;letter-spacing:.14em;text-transform:uppercase}h1{margin:18px 0;font-size:clamp(3rem,8vw,6rem);line-height:.95;letter-spacing:-.06em}p{color:#b7c4d8;font-size:1.08rem;line-height:1.75}.chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}.chips span{padding:9px 13px;border:1px solid rgba(255,255,255,.14);border-radius:999px;background:rgba(255,255,255,.05)}footer{margin-top:32px;color:#91a2ba}
+              </style>
+            </head>
+            <body>
+              <main>
+                <div class="eyebrow">Infrastructure as Code Deployment Successful</div>
+                <h1>AWS CloudFormation<br>Nginx Stack</h1>
+                <p>This website was deployed automatically from a CloudFormation template that created networking, security, IAM, compute, and web-server configuration as code.</p>
+                <div class="chips"><span>CloudFormation</span><span>Amazon VPC</span><span>Amazon EC2</span><span>Nginx</span><span>IAM</span><span>Systems Manager</span></div>
+                <footer>Stack: ${AWS::StackName} · Region: ${AWS::Region} · Built by Nithishkumar K</footer>
+              </main>
+            </body>
+            </html>
+            EOF
+            systemctl enable nginx
+            systemctl restart nginx
+            nginx -t
+            curl --retry 10 --retry-delay 3 --fail http://localhost
+      Tags:
+        - Key: Name
+          Value: { Fn::Sub: '${ProjectName}-${Environment}-web-server' }
+        - Key: Project
+          Value: { Ref: ProjectName }
+        - Key: Environment
+          Value: { Ref: Environment }
+        - Key: ManagedBy
+          Value: AWS CloudFormation
+
+Outputs:
+  WebsiteURL:
+    Description: Public URL of the Nginx website.
+    Value: { Fn::Sub: 'http://${WebServer.PublicDnsName}' }
+  InstanceId:
+    Value: { Ref: WebServer }
+  PublicIp:
+    Value: { Fn::GetAtt: [WebServer, PublicIp] }
+  VpcId:
+    Value: { Ref: ProjectVPC }
+  PublicSubnetId:
+    Value: { Ref: PublicSubnet }
+  WebSecurityGroupId:
+    Value: { Ref: WebSecurityGroup }
